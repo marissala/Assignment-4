@@ -1,0 +1,206 @@
+---
+title: "Assignment 4 - Coordinating Heart Rate"
+author: "Riccardo Fusaroli"
+date: "November 6, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Analysing Heart Rate and Respiration data
+
+The goal of this assignment is to first familiarize you with heart rate, and respiration data and their preprocessing. The second part explores how to analyze interpersonal coordination of these signals.
+
+These are the questions you need to be able to answer at the end of the assignment (aka that you need to submit as part of the portfolio)
+
+1) How do you preprocess heart rate and respiration data? Describe the process. If any data needs to be excluded, list the excluded data and motivate the exclusion.
+
+2) Do you observe interpersonal coordination in heart rate and respiration? Describe your control baseline, the method used to quantify coordination, and the statistical models used to infer whether coordination was higher than in the baseline. Report the results of the models.
+
+3) Do you observe differences in coordination between conditions? Report the models and results.
+
+4) Is respiration coordination a likely driver of heart rate coordination? Describe how you would test for it. Bonus points if you actually run the tests and report methods and results.
+
+N.B. to give you a bit more data I included data from last year (Study1) and from your class (Study2). Note that synchronouns and turn-taking are the same across both studies, but the third condition is different: last year it was self-paced joint reading; this year it was the tv-series conversation. So you might want to exclude the self-paced reading (but, up to you!)
+
+## Step by step suggestions to solve the assignment
+
+### Exploring physiological signals
+
+- Choose one pair (one pair, three conditions)
+- Load the logs
+- Produce a plot of the participants' respiration signal and a different one of the participants' HR signal (for inspecting whether the data is usable)
+  N.B: remember the slides: artifacts, downsampling, scaling.
+  N.B. The gridExtra::grid.arrange() function allows you to display the plots side by side. E.g. grid.arrange(plot1, plot2, plot3, ncol=3)
+- Can you eye-ball which condition if any displays more physiological coordination?
+
+- Run crqa on heart rate and respiration data (find parameters, run crqa)
+- Does this tell you more than just eyeballing the plots?
+
+```{r}
+# Some packgages
+pacman::p_load(knitr,lme4,caret,e1071,pROC,dplyr,gridExtra,pacman,crqa)
+
+# Read in data from 3 files to compare them on the plots
+data1 = read.csv("./CleanData/Study1_G1_T1_Synchronous.csv")
+data2 = read.csv("./CleanData/Study1_G1_T2_TurnTaking.csv")
+data3 = read.csv("./CleanData/Study2_G5_T1_Synchronous.csv")
+
+# Make the plots for the data
+plot1 = ggplot(data1, aes(time, Resp1)) + 
+  geom_line() +
+  geom_line(aes(time, Resp2),color="red")
+
+plot2 = ggplot(data2, aes(time, Resp1)) + 
+  geom_line() + 
+  geom_line(aes(time, Resp2), color="red")
+
+plot3 = ggplot(data3, aes(time, Resp1)) + 
+  geom_line() +
+  geom_line(aes(time, Resp2), color="red")
+
+# Plot the respiration data of the 3 files together
+gridExtra::grid.arrange(plot1,plot2,plot3)
+
+# Make plots for heart rate data
+plot12 = ggplot(data1, aes(time, HR1)) + 
+  geom_line() +
+  geom_line(aes(time, HR2),color="red")
+
+plot22 = ggplot(data2, aes(time, HR1)) + 
+  geom_line() + 
+  geom_line(aes(time, HR2), color="red")
+
+plot32 = ggplot(data3, aes(time, HR1)) + 
+  geom_line() +
+  geom_line(aes(time, HR2), color="red")
+
+# Plot the respiration data of the 3 files together
+#gridExtra::grid.arrange(plot12,plot22,plot32)
+
+mean(data1$Resp1)
+mean(data2$Resp1)
+
+mean(data1$Resp2)
+mean(data2$Resp2)
+
+```
+
+The respiration data in the 1st two of the chosen files falls flat for one of the participants. For further analysis I will use the third file because respiration data for both participants are not flat.
+
+```{r}
+# Downsample so R could handle
+pacman::p_load(groupdata2)
+
+d1 = data3 %>%
+  group(n = 100, method = 'greedy') %>%
+  dplyr::summarise(
+    time= mean(time,na.rm=T),
+    HR1 = mean(HR1,na.rm=T),
+    HR2 = mean(HR2,na.rm=T),
+    Resp1 = mean(Resp1,na.rm=T),
+    Resp2 = mean(Resp2,na.rm=T))
+
+# Rescaling the data so that the baseline for different people would be the same and variation comparable
+d1$Resp1 = scale(d1$Resp1)
+d1$Resp2 = scale(d1$Resp2)  
+d1$HR1 = scale(d1$HR1)
+d1$HR2 = scale(d1$HR2)
+
+# Remove artifacts - points where signal was lost (low drops in HR data for example)
+## Artifact removal function
+removeOuts <- function(ts,threshold){
+  ts[ts > (mean(ts,na.rm=T) +
+             (threshold*sd(ts,na.rm=T))) |  
+       ts < (mean(ts,na.rm=T) -
+             (threshold*sd(ts,na.rm=T)))] = 
+    mean(ts,na.rm=T)   
+  return(ts)}
+# Set threshold
+threshold = 1
+## why is it this?? should i change it for other things?
+
+d1$HR1=removeOuts(d1$HR1,threshold)
+d1$HR2=removeOuts(d1$HR2,threshold)
+d1$Resp1=removeOuts(d1$Resp1,threshold)
+d1$Resp2=removeOuts(d1$Resp2,threshold)
+
+# Plot before-after graphs
+## Before 
+plot3 = ggplot(data3, aes(time, Resp1)) + 
+  geom_line() +
+  geom_line(aes(time, Resp2), color="red")
+
+plot32 = ggplot(data3, aes(time, HR1)) + 
+  geom_line() +
+  geom_line(aes(time, HR2), color="red")
+## After
+plot3_after = ggplot(d1, aes(time, Resp1)) + 
+  geom_line() +
+  geom_line(aes(time, Resp2), color="red")
+
+plot32_after = ggplot(d1, aes(time, HR1)) + 
+  geom_line() +
+  geom_line(aes(time, HR2), color="red")
+
+## Plot together
+gridExtra::grid.arrange(plot3, plot3_after, plot32, plot32_after)
+```
+
+
+```{r}
+# Run crqa
+## Get parameters
+par = list(lgM =  50, steps = seq(1, 6, 1),  radiusspan = 200,  radiussample = 100, normalize = 0,  rescale = 0,  mindiagline = 2,  minvertline = 2,  tw = 0,  whiteline = FALSE,  recpt = FALSE,  fnnpercent = 10,  typeami = "mindip")
+ans = optimizeParam(d1$HR1, d1$HR2, par, min.rec= 1, max.rec= 10)
+## CRQA analysis
+(crqa_one = crqa (d1$HR1, d1$HR2, delay=ans$delay, embed=ans$emddim, radius=ans$radius, normalize=0, rescale=0, mindiagline = 2, minvertline = 2))
+## Plot
+RP = crqa_one$RP
+RP = matrix(as.numeric(RP), nrow = ncol(RP))
+cols = c("white","blue4")
+image(RP, xlab = "", ylab = "", col = cols)
+```
+
+### Systematically pre-process the data
+- Loop through all the files (either with a loop or with a function), check which files should be excluded, if any, and save the pre-processed time-series. Tip: plot and visually inspect the data to figure out which should be excluded.
+- Run crqa on all the pre-processed time-series and save the output (don't forget to add columns with study, group, condition and trial). Tip: remember to first assess optimal parameters (dimensions, delay, radius) across all timeseries. Tip: it will often fail, just take whatever parameters you get, select optimal across timeseries parameters and run crqa on all timeseries with those. Tip: double check the rr. When I ran the loop, I got very low rr, so I adjusted the radius until the average of rr across all pairs was approx. 4%.
+
+```{r}
+# Make sure to visualize the plots to know what to exclude
+# Visualize data loop
+## Seems like flatlines have a mean thats close to -10 and nonflats have it close to 0, remove files where the mean of resp1 OR resp2 is close to -10
+
+
+
+
+```
+
+### Creating controls: shuffled controls
+ - loop through all pairs and conditions
+ - shuffle the timeseries (take a timeseries and rearrange its values in a random order). Tip check the sample() function
+ - run crqa and save the output. NB. which delay, embed, radius parameters should you use?
+ - statistically compare the crqa indexes in real and shuffled pairs
+
+```{r}
+# sample function is a good way of shuffeling
+```
+
+### TRICKY! Creating controls: surrogate pair controls
+ - Per each real pair, identify at least one surrogate pair (matching one of the participants, with somebody doing the same task, but in a different pair). Tip: Celine will share a commented script
+ - Run crqa on all the surrogate pairs and save the output. NB. which delay, embed, radius parameters should you use?
+ - Test whether crqa shows a difference between real and surrogate pairs
+
+```{r}
+
+```
+
+### Testing effects of conditions
+ - make a (probably underpowered) mixed model testing effects of the different conditions on heart rate and respiration coordination
+ - N.B: would it make sense to include surrogate pairs? and if so how? what would that tell you?
+
+### Effects of respiration coordination on heart rate coordination
+ - describe how you would test those.
+ - Optional: run the models and report them
